@@ -1,0 +1,1089 @@
+//###################################################
+//# ###											### #
+//# ### Epics SNL Routines for					### #
+//# ### Scan System with Lissajous Path			### #
+//# ###											### #
+//# ### author: D. Hampai - M. Montis			### #
+//# ###											### #
+//# ### Ref 1.0; 2026-07-15						### #
+//###################################################
+//#
+//
+program ls_vitruvio_sncscan
+/*
+ * PVs (from ls_scan.db):
+ *   {user}:status				- ai				- Status Mode of Scan
+ *   {user}:end_scan			- ai				- End Scan (1=yes)
+ *   {user}:state				- stringin			- Actual State							(ex liss_status - to check)
+ *   {user}:experiment			- stringin			- Name of Experiment
+ *   {user}:total_points		- ai				- Number of points
+ *   {user}:current_point		- ai				- Actual Step point						(ex liss_current)
+ *   {user}:scan_progress		- ai				- Scan Progress in %					(ex liss_progress)
+ *   {user}:scan_busy			- ai				- Scan is busy (1=yes)					(ex liss_busy)
+ *   {user}:scan_pause			- ao				- Scan Pause
+ *   {user}:scan_restart		- ao				- Scan Restart
+ *   {user}:scan_abort			- ao				- Scan Abort
+ *   {user}:scan:filepath		- stringout			- Output File Path
+ *   {user}:server:name			- stringout			- Name od Server
+ *   {user}:filename			- subArray (string)	- Data File Name for each detector
+ *   {user}:num_motor			- ao				- Number of Motors (default 2)
+ *   {user}:num_detector		- ao				- Number of Detetors (default 1)
+ *   {user}:start				- subArray			- Starting Point Scan					(ex liss_xmin/ymin)
+ *   {user}:end					- subArray			- Ending Point Scan					(ex liss_xmax/ymax)
+ *   {user}:step				- subArray			- Step Point Scan					(ex liss_xstep/ystep)
+ *   {user}:liss_freq			- waveform (dbl)	- Frequency a/b						(ex liss_a_freq/b_freq)
+ *   {user}:liss_delta			- ao				- Delta Phase (rad)
+ *   {user}:liss_target_pts		- longout (int)		- Step to done (0=all)
+ *   {user}:liss_skip			- longin (int)		- Skip (output)
+ *   {user}:motor				- subArray			- Name IOC motors
+ *   {user}:motor_command		- waveform			- List Motor Command
+ *   {user}:detector			- subArray			- Name IOC detectors
+ *   {user}:detector_command	- waveform			- List Detector Command
+ *   {user}:data_out			- subArray			- Name file to store (type detector >=2)
+ *
+ **  {user}:liss_xmin/xmax/ymin/ymax  - range scansione
+ **  {user}:liss_xstep/ystep          - passo quantizzazione
+ **  {user}:liss_a_freq/b_freq        - frequenze Lissajous (es. 11,9)
+ **  {user}:liss_delta                - sfasamento in radianti
+ **  {user}:liss_target_pts           - punti target (auto-skip)
+ **  {user}:liss_skip                 - skip calcolato (output)
+ **  {user}:liss_start                - 1=avvia scansione
+ **  {user}:liss_abort                - 1=interrompi
+ **  {user}:liss_npoints              - punti generati (output)
+ **  {user}:liss_current              - punto corrente (output)
+ **  {user}:liss_progress             - progresso % (output)
+ *   {user}:liss_pos_x/pos_y          - posizione corrente (output)
+ **  {user}:liss_detector             - valore rivelatore (output)
+ **  {user}:liss_status               - stringa stato (output)
+ **  {user}:liss_outfile              - path file output (input)
+ **  {user}:liss_busy                 - 0=libero 1=occupato (output)
+ */
+
+/* ── Inclusioni C minime (solo quelle strettamente necessarie) ── */
+%{
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <math.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <time.h>
+#include <sys/stat.h>
+#include "vitruvio_utils.h"
+#include "lissajous_utils.h"
+#include <epicsThread.h>
+
+
+#define MAX_LISSAJOUS_POINTS 8192
+
+/* Array coordinate: statici, non esposti come PV */
+static double liss_x[MAX_LISSAJOUS_POINTS];
+static double liss_y[MAX_LISSAJOUS_POINTS];
+static int    liss_npoints_c = 0;
+static int    liss_idx       = 0;
+
+/* File di output */
+//static FILE  *liss_file = NULL;
+
+#define MAX_MOTORS 20
+#define MAX_DETECTORS 20
+
+//File di Summary
+static FILE *summary_file;
+static char general_path_save_file[512];
+
+//File Generali di scan per detector
+static FILE *detector_files[MAX_DETECTORS];
+static char detector_paths[MAX_DETECTORS][512];
+
+//File Salvataggio detector
+static FILE *data_files[MAX_DETECTORS];
+static char data_paths[MAX_DETECTORS][512];
+}%
+/*=================== Declarations =========================*/
+
+option +r;       /* Make the generated code reentrant, thus allowing more than one instance of the program to run on an IOC */
+//
+//	file generale - 			NOME: general_path_save_file - 	File: summary_file -> sum_file
+//	file scan per detector - 	NOME: detector_paths[i] - 		File: detector_files[i] - 	SOLO NOME FILE: files_out[i]
+//	file per data out 			Nome: data_paths[i] - 			File: data_files[i] - 		SOLO NOME FILE: data_out[i]
+//
+//	Output Configuration Files
+//
+//	Save Path File
+string output_path; assign output_path to "{user}:scan:filepath"; monitor output_path;
+int num_files_open;
+
+// Save Summary File
+string sum_file[60]; assign sum_file to "{user}:scan_file"; monitor sum_file;
+
+// Save General File for each detector (NOME GENERAL FILE PER DETECTOR)
+string files_out[20]; assign files_out to "{user}:filename"; monitor files_out;
+
+//	Save Data for Detector Type >= 2 (NOME FILE DATA OUT)
+string data_out[20]; assign data_out to {}; monitor data_out;
+
+string name_server; assign name_server to "{user}:server:name"; monitor name_server;
+string name_exp_pv; assign name_exp_pv to "{user}:experiment"; monitor name_exp_pv;
+
+char full_save_path[80];
+char general_save_file[90];
+string name_exp[40];
+//
+// General Scan Configuration
+//
+int status_mode; assign status_mode to "{user}:status"; monitor status_mode;
+string actual_status[80]; assign actual_status to "{user}:state"; monitor actual_status;
+char local_actual_status[80];
+
+int scan_busy; assign scan_busy to "{user}:scan_busy"; monitor scan_busy;
+int scan_pause; assign scan_pause to "{user}:scan_pause"; monitor scan_pause;
+int scan_restart; assign scan_restart to "{user}:scan_restart"; monitor scan_restart;
+int scan_abort; assign scan_abort to "{user}:scan_abort"; monitor scan_abort;
+int end_scan; assign end_scan to "{user}:end_scan"; monitor end_scan;
+//
+//	Definition Scan Parameters
+//
+int num_mot; assign num_mot to "{user}:num_motor"; monitor num_mot;
+int num_det; assign num_det to "{user}:num_detector"; monitor num_det;
+
+double start[20]; assign start to "{user}:start"; monitor start;
+double end[20]; assign end to "{user}:end"; monitor end;
+double step[20]; assign step to "{user}:step"; monitor step;
+int npoints[20]; assign npoints to "{user}:num_steps"; monitor npoints;
+int steps;
+/* Parametri Lissajous
+double liss_a_freq; assign liss_a_freq to "{user}:liss_a_freq"; monitor liss_a_freq;
+double liss_b_freq; assign liss_b_freq to "{user}:liss_b_freq"; monitor liss_b_freq; */
+double liss_freq[2]; assign liss_freq to "{user}:liss_freq"; monitor liss_freq;
+double liss_delta; assign liss_delta to "{user}:liss_delta"; monitor liss_delta;
+int liss_target; assign liss_target to "{user}:liss_target_pts"; monitor liss_target;
+int liss_skip_pv; assign liss_skip_pv to "{user}:liss_skip"; monitor liss_skip_pv;
+//
+double liss_a_freq;
+double liss_b_freq;
+double posit[20];
+int index[20];
+//
+int total_points; assign total_points to "{user}:total_points"; monitor total_points;
+int current_point; assign current_point to "{user}:current_point"; monitor current_point;
+double scan_progress; assign scan_progress to "{user}:scan_progress"; monitor scan_progress;
+//
+//	Definition Loop Parameters
+//
+int flags[20];
+//
+//	Definition Motors Variables
+//
+string motor[20]; assign motor to "{user}:motor"; monitor motor;
+string mot_command[7]; assign mot_command to "{user}:motor_command"; monitor mot_command;
+//
+// Definition Detectors Variables
+//
+string detector[20]; assign detector to "{user}:detector"; monitor detector;
+string det_command[8]; assign det_command to "{user}:detector_command"; monitor det_command;
+
+// Local Strings
+double motget; assign motget to ""; monitor motget;
+double motset; assign motset to ""; monitor motset;
+double detget; assign detget to ""; monitor detget;
+double detset; assign detset to ""; monitor detset;
+
+double pos;
+double mov_wait;
+double acq_wait;
+//
+//	Local Variables
+//
+double motor_mr[20]; assign motor_mr to {}; monitor motor_mr;
+double motor_ma[20]; assign motor_ma to {}; monitor motor_ma;
+int motor_reqmov[20]; assign motor_reqmov to {}; monitor motor_reqmov;
+int motor_mov[20]; assign motor_mov to {}; monitor motor_mov;
+int motor_reqpos[20]; assign motor_reqpos to {}; monitor motor_reqpos;
+double motor_pos[20]; assign motor_pos to {}; monitor motor_pos;
+int motor_status[20]; assign motor_status to {}; monitor motor_status;
+//
+int detector_reqstart[20]; assign detector_reqstart to {}; monitor detector_reqstart;
+int detector_reqready[20]; assign detector_reqready to {}; monitor detector_reqready;
+int detector_ready[20]; assign detector_ready to {}; monitor detector_ready;
+int detector_reqdata[20]; assign detector_reqdata to {}; monitor detector_reqdata;
+double detector_data[20]; assign detector_data to {}; monitor detector_data;
+int detector_type[20]; assign detector_type to{}; monitor detector_type;
+int detector_status[20]; assign detector_status to {}; monitor detector_status;
+//
+int i;
+int j;
+int k;
+int d;
+int allready;
+int command;
+char temp_string[80];
+char temp_status[80];
+char temp_exp[40];
+int all_connected;
+int checkbusy;
+int busyioc;
+//
+/* ════════════════════════════════════════════════
+ *  VARIABILI SNL → PV
+ * ════════════════════════════════════════════════ */
+ 
+
+/* Parametri range
+double xmin;   assign xmin   to "{user}:liss_xmin";   monitor xmin;
+double xmax;   assign xmax   to "{user}:liss_xmax";   monitor xmax;
+double ymin;   assign ymin   to "{user}:liss_ymin";   monitor ymin;
+double ymax;   assign ymax   to "{user}:liss_ymax";   monitor ymax;
+double xstep;  assign xstep  to "{user}:liss_xstep";  monitor xstep;
+double ystep;  assign ystep  to "{user}:liss_ystep";  monitor ystep;
+*/
+
+/* Controllo
+int liss_start;   assign liss_start to "{user}:liss_start";   monitor liss_start;
+int liss_abort;   assign liss_abort to "{user}:liss_abort";   monitor liss_abort;
+*/
+
+
+/* Output stato
+int    liss_current_pv;  assign liss_current_pv to "{user}:liss_current"; -> current_point
+double liss_progress;    assign liss_progress   to "{user}:liss_progress"; -> scan_progress
+double detector_value;   assign detector_value  to "{user}:liss_detector";
+string liss_status;      assign liss_status     to "{user}:liss_status"; -> actual_status
+string liss_outfile;     assign liss_outfile    to "{user}:liss_outfile";  monitor liss_outfile;
+int    liss_busy;        assign liss_busy       to "{user}:liss_busy"; -> busy
+*/
+int    liss_npoints_pv;  assign liss_npoints_pv to "{user}:liss_npoints";
+double pos_x;            assign pos_x           to "{user}:liss_pos_x";
+double pos_y;            assign pos_y           to "{user}:liss_pos_y";
+
+
+/* Variabili locali di lavoro */
+char errmsg[128];
+
+/* ════════════════════════════════════════════════
+ *  STATE SET
+ * ════════════════════════════════════════════════ */
+ss lissajous_ss {
+/*=================== Start Program =========================*/
+	state init {
+		when (status_mode==0) {
+			pvGet(name_exp_pv,SYNC);
+			if (scan_busy==0) {
+				printf("****************************\n");
+				printf("********* ERROR!!! *********\n");
+				printf("***    Exp %s is busy    ***\n", name_exp_pv);
+				printf("****************************\n");
+//				strcpy(local_actual_status, "Exp %s in use", name_exp_pv);
+				strcpy(actual_status,local_actual_status);
+				sprintf(actual_status, "Exp %s busy", name_exp_pv);
+			} else {
+				printf("**********************\n");
+				printf("*** Ready for Scan ***\n");
+				printf("***    Exp %s    ***\n", name_exp_pv);
+				printf("**********************\n");
+//				strcpy(actual_status, "Starting Scan Program");
+				sprintf(local_actual_status, "Starting Scan %s", name_exp_pv);
+				strcpy(actual_status,local_actual_status);
+				printf("The Actual Status is = %s\n", actual_status);
+				pvPut(actual_status,SYNC);
+			}
+		} state idle
+	}
+	state idle {
+		when (status_mode==1) {
+			printf("\n********************\n");
+			printf("*** Assign Motor ***\n");
+			printf("********************\n");
+		} state assign_motor
+		when (status_mode==2) {
+			printf("\n***********************\n");
+			printf("*** Assign Detector ***\n");
+			printf("***********************\n");
+		} state assign_detector
+		when (status_mode==3) {
+			printf("\n***************************\n");
+			printf("*** Initialization Loop ***\n");
+			printf("***************************\n");
+		} state init_loop
+		when (status_mode==4) {
+			printf("\n*******************\n");
+			printf("*** Connecting PV **\n");
+			printf(" *******************\n");
+		} state wait_connect
+		when (status_mode==5) {
+			printf("\n********************\n");
+			printf("*** Prepare Loop ***\n");
+			printf("********************\n");
+		} state prepare_loop
+			when (status_mode==6) {
+			printf("\n******************\n");
+			printf("*** Loop ***\n");
+			printf("******************\n");
+		} state loop
+	}
+/*=================== Assign Motor Varibles =========================*/
+/*======================= status_mode = 1 ===========================*/
+	state assign_motor {
+		when () {
+			printf("num_mot = %d\n", num_mot);
+			for (i = 0; i < num_mot; i++) {
+				printf("index = %d\n", i);
+//
+				command=0; 
+				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]); 
+				printf("%s\n", temp_string);
+				pvAssign(motor_mr[i],temp_string); 
+//
+				command=1;
+				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(motor_ma[i],temp_string);
+//
+				command=2;
+				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(motor_reqmov[i],temp_string);
+//
+				command=3;
+				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(motor_mov[i],temp_string);
+//
+				command=4;
+				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(motor_reqpos[i],temp_string);
+//
+				command=5;
+				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(motor_pos[i],temp_string);
+//
+				command=6;
+				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(motor_status[i],temp_string);
+			}
+			strcpy(local_actual_status, "Motors Parameters Assigned - Status 1");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			status_mode=0;
+			pvPut(status_mode,SYNC);
+		} state idle
+	}
+/*=================== Assign Detector Varibles =========================*/
+/*======================== status_mode = 2 =============================*/
+	state assign_detector {
+		when () {
+			printf("num_det = %d\n", num_det);
+			for (i = 0; i < num_det; i++) {
+				printf("index = %d\n", i);
+//
+				command=0;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_reqstart[i],temp_string);
+//
+				command=1;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_reqdata[i],temp_string);
+//
+				command=2;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_data[i],temp_string);
+//
+				command=3;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_reqready[i],temp_string);
+//
+				command=4;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_ready[i],temp_string);
+//
+				command=5;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_type[i],temp_string);
+//
+				command=6;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_status[i],temp_string);
+//
+				command=7;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(data_out[i],temp_string);
+			}
+			strcpy(local_actual_status, "Detect. Parameters Assigned - Status 2");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			status_mode=0;
+			pvPut(status_mode,SYNC);
+		} state idle
+	}
+/*=================== Initialize Loop =========================*/
+/*=================== status_mode = 3 =========================*/
+
+	state init_loop {
+
+		when() {
+			int opt_skip;
+			end_scan=1; // initialize end scan
+			pvPut(end_scan,SYNC);
+			total_points = 1;
+			for (i = 0; i < num_mot; i++) {
+				flags[i]=0;  // init flags
+				posit[i]=start[i];
+				index[i]=0;
+				npoints[i] = ( (end[i]-start[i]) / step[i] ) + 1;
+				printf("the number steps fo %d motor is %d\n", i, npoints[i]);
+				total_points *= npoints[i];
+				printf("the step number is %d\n", total_points);
+			}
+			pvPut(npoints,SYNC);
+			pvPut(total_points,SYNC);
+//
+// (x[i],y[i]) from lissahous path
+//
+/*			Different from Lissajous Template
+			pvGet(xmin,        SYNC);
+			pvGet(xmax,        SYNC);
+			pvGet(ymin,        SYNC);
+			pvGet(ymax,        SYNC);
+			pvGet(xstep,       SYNC);
+			pvGet(ystep,       SYNC);
+//			Same as lissahous template
+			xmin = start[0];
+			ymin = start[1];
+			xmax = end[0];
+			ymax = end[1];
+			xstep = step[0];
+			ystep = step[1];
+			pvGet(liss_a_freq, SYNC);
+			pvGet(liss_b_freq, SYNC); */
+			pvGet(liss_freq, SYNC);
+			liss_a_freq = liss_freq[0];
+			liss_b_freq = liss_freq[1];
+			pvGet(liss_delta,  SYNC);
+			pvGet(liss_target, SYNC);
+//			pvGet(liss_outfile,SYNC); -> file di output in altre sezioni
+//
+			printf("start[0] = %f, end[0] = %f, step[0] = %f\n", start[0], end[0], step[0]);
+			printf("start[1] = %f, end[1] = %f, step[1] = %f\n", start[1], end[1], step[1]);
+			printf("liss_a_freq = %f, liss_b_freq = %f\n", liss_a_freq, liss_b_freq);
+			/* Validate Parameters */
+			if (end[0] <= start[0] || end[1] <= start[1] ||
+				step[0] <= 0.0 || step[1] <= 0.0 ||
+				liss_a_freq <= 0.0 || liss_b_freq <= 0.0) {
+				printf("\n****************\n");
+				printf("lissajous scan: ERROR - Not Valid Parameters\n");
+				printf("\n****************\n");
+				sprintf(actual_status, "ERROR: invalid parameters");
+				pvPut(actual_status, SYNC);
+				pvPut(scan_busy,SYNC);
+			} else {
+				sprintf(actual_status, "Finding optimal skip...");
+				pvPut(actual_status, SYNC);
+				/*
+				 * Step 1 - Find optimal skip for target_points
+				 * (if target <= 0 use skip=1, i.e. all points)
+				 */
+				if (liss_target > 0) {
+/*					opt_skip = find_lissajous_skip(
+						xmin, xmax, ymin, ymax,
+						xstep, ystep,
+						liss_a_freq, liss_b_freq, liss_delta,
+						liss_target,
+						liss_x, liss_y,
+						MAX_LISSAJOUS_POINTS
+					);
+*/
+					opt_skip = find_lissajous_skip(
+						start[0], end[0], start[1], end[1],
+						step[0], step[1],
+						liss_a_freq, liss_b_freq, liss_delta,
+						liss_target,
+						liss_x, liss_y,
+						MAX_LISSAJOUS_POINTS
+					);
+				} else {
+					opt_skip = 1;
+				}
+				liss_skip_pv = opt_skip;
+				pvPut(liss_skip_pv, SYNC);
+//
+				/*
+				 * Step 2 - Generate Optimal Path from Optimized Skip 
+				 */
+/*
+				liss_npoints_c = generate_lissajous_path(
+					xmin, xmax, ymin, ymax,
+					xstep, ystep,
+					liss_a_freq, liss_b_freq, liss_delta,
+					opt_skip,
+					liss_x, liss_y,
+					MAX_LISSAJOUS_POINTS
+				);
+*/
+				liss_npoints_c = generate_lissajous_path(
+					start[0], end[0], start[1], end[1],
+					step[0], step[1],
+					liss_a_freq, liss_b_freq, liss_delta,
+					opt_skip,
+					liss_x, liss_y,
+					MAX_LISSAJOUS_POINTS
+				);
+				if (liss_npoints_c <= 0) {
+					printf("\n****************\n");
+					printf("Generation Lissajous Path: ERROR - Failed Generation\n");
+					printf("\n****************\n");
+					sprintf(actual_status, "ERROR: path generation failed");
+					pvPut(actual_status, SYNC);
+				} else {
+					liss_idx        = 0;
+					liss_npoints_pv = liss_npoints_c;
+					current_point = 0;
+					scan_progress = 0.0;
+					pvPut(liss_npoints_pv, SYNC);
+					pvPut(current_point, SYNC);
+					pvPut(scan_progress, SYNC);
+					printf("Lissajous path ready: %d points(skip=%d)\n", liss_npoints_c, opt_skip);
+					sprintf(actual_status, "Path ready: %d points (skip=%d)", liss_npoints_c, opt_skip);
+					pvPut(actual_status, SYNC);
+				}
+			}
+			pvPut(npoints,SYNC);
+			pvPut(total_points,SYNC);
+			current_point=0;
+			pvPut(current_point,SYNC);
+			scan_busy=1;
+			pvPut(scan_busy,SYNC);
+			scan_restart=0;
+			pvPut(scan_restart,SYNC);
+			scan_pause=0;
+			pvPut(scan_pause,SYNC);
+			scan_abort=0;
+			pvPut(scan_abort,SYNC);
+		} state check_init
+	}
+//
+	state check_init {
+		when() {
+			checkbusy=0;
+			for (i = 0; i < num_mot; i++) {
+				printf("Status Busy Motor %d = %d\n", i, motor_status[i]);
+				if (motor_status[i]==1) {
+					checkbusy=checkbusy;
+				} else {
+					checkbusy++;
+				}
+			}
+			for (i = 0; i < num_det; i++) {
+				printf("Status Busy Detector %d = %d\n", i, detector_status[i]);
+				if (detector_status[i]==1) {
+					checkbusy=checkbusy;
+				} else {
+					checkbusy++;
+				}
+			}
+			printf("0 if all the IOCs are ready = %d\n", checkbusy);
+		} state ifbusy
+	}
+//
+	state ifbusy {
+		when(checkbusy==0) {
+			printf("All the IOCs are in idle state");
+		} state end_init
+//		
+		when(checkbusy!=0) {
+			printf("At least one IOC is busy");
+		} state error_busy
+	}
+//
+	state end_init{
+		when() {
+			pvPut(total_points,SYNC);
+			current_point=0;
+			pvPut(current_point,SYNC);
+			scan_busy=1;
+			pvPut(scan_busy,SYNC);
+			scan_restart=0;
+			pvPut(scan_restart,SYNC);
+			scan_pause=0;
+			pvPut(scan_pause,SYNC);
+			scan_abort=0;
+			pvPut(scan_abort,SYNC);
+//
+			strcpy(local_actual_status, "Scan Initialized - Status 3");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			status_mode=0;
+			pvPut(status_mode,SYNC);
+		} state idle
+	}
+/*=================== Conneting PV ===========================*/
+/*=================== status_mode = 4 ========================*/
+	state wait_connect {
+		when () {
+			all_connected = 1;
+// PV Motors
+			printf("PV for %d motors\n", num_mot);
+			for (i = 0; i < num_mot; i++) {
+				if (!pvConnected(motor_mr[i])) {
+					all_connected = 0;
+					printf("Motor %d motor_mr not connected\n", i);
+				}
+				if (!pvConnected(motor_ma[i])) {
+					all_connected = 0;
+					printf("Motor %d motor_ma not connected\n", i);
+				}			
+				if (!pvConnected(motor_reqmov[i])) {
+					all_connected = 0;
+					printf("Motor %d motor_reqmov not connected\n", i);
+				}
+				if (!pvConnected(motor_mov[i])) {
+					all_connected = 0;
+					printf("Motor %d motor_mov not connected\n", i);
+				}
+				if (!pvConnected(motor_reqpos[i])) {
+					all_connected = 0;
+					printf("Motor %d motor_reqpos not connected\n", i);
+				}
+				if (!pvConnected(motor_pos[i])) {
+					all_connected = 0;
+					printf("Motor %d motor_pos not connected\n", i);
+				}
+				if (!pvConnected(motor_status[i])) {
+					all_connected = 0;
+					printf("Motor %d motor_status not connected\n", i);
+				}
+			}
+			printf("Status PV-Motors Connections = %d\n", all_connected);
+// PV Detectors
+			printf("PV for %d detetors\n", num_det);
+			for (i = 0; i < num_det; i++) {
+				if (!pvConnected(detector_reqstart[i])) {
+					all_connected = 0;
+					printf("Detector %d detector_reqstart not connected\n", i);
+				}
+				if (!pvConnected(detector_reqdata[i])) {
+					all_connected = 0;
+					printf("Detector %d detector_reqdata not connected\n", i);
+				}			
+				if (!pvConnected(detector_data[i])) {
+					all_connected = 0;
+					printf("Detector %d detector_data not connected\n", i);
+				}
+				if (!pvConnected(detector_reqready[i])) {
+					all_connected = 0;
+					printf("Detector %d detector_reqready not connected\n", i);
+				}
+				if (!pvConnected(detector_ready[i])) {
+					all_connected = 0;
+					printf("Detector %d detector_ready not connected\n", i);
+				}
+				if (!pvConnected(detector_type[i])) {
+					all_connected = 0;
+					printf("Detector %d detector_type not connected\n", i);
+				}
+				if (!pvConnected(detector_status[i])) {
+					all_connected = 0;
+					printf("Detector %d detector_status not connected\n", i);
+				}
+			}
+			printf("Status PV-Detectors Connections = %d\n", all_connected);
+			if (all_connected==1) {
+				printf("All PVs are connected!\n");
+				strcpy(local_actual_status, "Detect. Parameters Assigned - Status 4");
+				strcpy(actual_status,local_actual_status);
+				pvPut(actual_status,SYNC);
+				status_mode=0;
+				pvPut(status_mode,SYNC);
+			} else {
+				printf("All PVs are NOT connected!\n");
+				strcpy(local_actual_status, "Error in PV Connection - Status 4");
+				strcpy(actual_status,local_actual_status);
+				pvPut(actual_status,SYNC);
+				status_mode=0;
+				pvPut(status_mode,SYNC);
+			}
+		} state idle
+	}
+/*=================== Preparing Scan =========================*/
+/*=================== status_mode = 5 ========================*/
+	state prepare_loop {
+		when () {
+			strcpy(local_actual_status, "Preparing Loop - Status 5");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			scan_busy=0;
+			pvPut(scan_busy,SYNC);
+			for (i = 0; i < num_mot; i++) {
+				motor_status[i]=0;
+				pvPut(motor_status[i],SYNC);
+			}
+			for (i = 0; i < num_det; i++) {
+				detector_status[i]=0;
+				pvPut(detector_status[i],SYNC);
+			}
+			flags[0]=1; // Necessary to start the run
+			strcpy(local_actual_status, "Ready to Start - status 5");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			status_mode=6;
+			pvPut(status_mode,SYNC);
+		} state open_file
+	}
+//
+//	Preparing General Save Files
+//
+	state open_file {
+		when() {
+%{
+			char timestamp[64];
+			time_t now;
+			struct tm *tm_info;
+}%
+			num_files_open = 0;
+			for (i = 0; i < MAX_DETECTORS; i++) {
+				detector_files[i] = NULL;
+			}
+			time(&now);
+			tm_info = localtime(&now);
+			strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+//
+//	Summary File
+//
+			sprintf(full_save_path, "/home/%s/%s", name_server, output_path);
+			generate_general_filename(general_path_save_file, sizeof(general_path_save_file), general_save_file, sizeof(general_save_file), full_save_path, name_exp_pv);
+//
+			strcpy(sum_file,general_save_file);
+			pvPut(sum_file,SYNC);
+//
+			printf("Summary File: %s\n", general_path_save_file);
+			summary_file = fopen(general_path_save_file, "w");
+			if (summary_file == NULL) {
+				printf("Scan: ERROR - Cannot open file %s: %s\n", general_path_save_file, strerror(errno));
+			} else {
+				fprintf(summary_file, "# Lissajous Scan Data - Summary\n");
+				fprintf(summary_file, "# Timestamp: %s\n", timestamp);
+				fprintf(summary_file, "# Number of motors: %d\n", num_mot);
+				fprintf(summary_file, "# Number of detectors: %d\n", num_det);
+//	write mot 1, mot 2, ... mot n, det J
+				for (i = 0; i < num_det; i++ ) {
+					for (j = 0; j < num_mot; j++) {
+						fprintf(summary_file, "Motor %d: %s \t", j+1, motor[j]);
+					}
+					fprintf(summary_file, "Detector %d: %s \n", i+1, detector[i]);
+				}
+				fflush(summary_file);
+			}
+//
+//	General File for each Detector
+//
+			num_files_open = 0;
+			for (i = 0; i < num_det; i++) {
+//				snprintf(files_out[i], sizeof(files_out[i]),"sc_%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
+				snprintf(files_out[i], sizeof(files_out[i]),"%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
+				snprintf(detector_paths[i], sizeof(detector_paths[i]),"/home/%s/%s/%s", name_server, output_path, files_out[i]);
+				detector_files[i] = fopen(detector_paths[i], "w");
+				printf("Scan: Opening file for Detector %i: %s\n", i+1, detector_paths[i]);
+				if (detector_files[i] == NULL) {
+					printf("Scan: ERROR - Cannot open file %s: %s\n", detector_paths[i], strerror(errno));
+				} else {
+					num_files_open++;
+					fprintf(detector_files[i], "# Lissajous Scan Data - Detector %d\n", i+1);
+					fprintf(detector_files[i], "# Timestamp: %s\n", timestamp);
+					fprintf(detector_files[i], "# Number of motors: %d\n", num_mot);
+					fprintf(detector_files[i], "# Columns: ");
+					for (j = 0; j < num_mot; j++) {
+						fprintf(detector_files[i], "Data Motor%d\t Real Motor%d\t", j+1, j+1);
+					}
+					fprintf(detector_files[i], "Detector%d\n", i+1);
+					fflush(detector_files[i]);
+				}
+			}
+			pvPut(files_out,SYNC);
+			if (num_files_open == 0) {
+				printf("Scan: ERROR - No files opened! Check path and permissions\n");
+			}
+//	reset the scan loop
+			liss_idx = 0;
+		} state loop
+	}
+/*====================== Loop ============================*/ 
+/*================= status_mode = 6 ======================*/
+	state loop {
+		when(scan_abort==1) {
+			printf("Scan Aborted by User\n");
+		} state abort_scan
+		when(scan_pause==1) {
+			printf("Scan Paused by User\n");
+		} state pause_scan
+//
+		when (liss_idx >= liss_npoints_c) {
+			printf("Scan Completed (%d punti)\n", liss_npoints_c);
+			sprintf(actual_status, "Completed: %d points", liss_npoints_c);
+			pvPut(actual_status, SYNC);
+		} state ending
+		when() {
+			strcpy(local_actual_status, "Loop - Status 6");
+			strcpy(actual_status,local_actual_status);
+			strcpy(actual_status, temp_status);
+			pvPut(actual_status,SYNC);
+		} state loops
+	}
+	state loops {
+		when(scan_abort==1) {
+			printf("Scan Aborted by User\n");
+		} state abort_scan
+		when(scan_pause==1) {
+			printf("Scan Aborted by User\n");
+		} state pause_scan
+		when() {
+		} state moving
+	}
+	state moving {
+		when() {
+			pos_x = liss_x[liss_idx];
+			pos_y = liss_y[liss_idx];
+			pvPut(pos_x, SYNC);
+			pvPut(pos_y, SYNC);
+//
+			motor_ma[0]=pos_x;
+			motor_ma[1]=pos_y;
+			pvPut(motor_ma[0],SYNC);
+			pvPut(motor_ma[1],SYNC);
+			motor_reqmov[0]=1;
+			motor_reqmov[1]=1;
+			pvPut(motor_reqmov[0],SYNC);
+			pvPut(motor_reqmov[1],SYNC);
+			pvGet(motor_mov[0],SYNC);
+			pvGet(motor_mov[1],SYNC);
+		} state motor_waiting_ready
+	}
+	state motor_waiting_ready {
+		when (allready==0) {
+		} state acquiring
+		when () {
+			allready = 0;
+			for (j=0; j < 2; j++) {
+				motor_reqmov[j]=1;
+				pvPut(motor_reqmov[j],SYNC);
+				pvGet(motor_mov[j],SYNC);
+				epicsThreadSleep(1.0);
+				if (motor_mov[j]<1) {
+					allready++;
+				}
+				epicsThreadSleep(1.0);
+			}
+		} state motor_waiting_ready
+	}
+	state acquiring {
+		when() {
+			for (j=0; j < num_det; j++) {
+//	Salvo per primo i valori dei motori sul file generale
+				for (k=0; k<num_mot; k++) {
+					fprintf(detector_files[j], "%.3f\t%.3f\t", motor_ma[k], motor_pos[k]);
+				}
+			}
+//	Phase 1 - Start all the detectors
+			for (j=0; j < num_det; j++) {
+				detector_reqstart[j]=1;
+				pvPut(detector_reqstart[j],SYNC);
+			}
+		allready = 1;		
+		} state waiting_ready
+	}
+//	Phase 2 - Pull untill all ready
+	state waiting_ready {
+		when (allready==0) {
+		} state saving_data
+		when () {
+			allready = 0;
+			for (j=0; j < num_det; j++) {
+				detector_reqready[j]=1;
+				pvPut(detector_reqready[j],SYNC);
+				epicsThreadSleep(1.0);
+				pvGet(detector_ready[j],SYNC);
+				if (detector_ready[j]<1) {
+					allready++;
+				}
+				epicsThreadSleep(1.0);
+			}
+		} state waiting_ready
+	}
+//	Phase 3 - Store Data
+	state saving_data {
+		when () {
+			for (j=0; j < num_det; j++) {
+				if (detector_type[j] == 1) {
+					pvGet(detector_data[j],SYNC);
+					fprintf(detector_files[j], "%.0f\n", detector_data[j]);
+					fflush(detector_files[j]);
+				} else if (detector_type[j] == 2) {
+					generate_filename_with_time(data_paths[j], sizeof(data_paths[j]), data_out[j], sizeof(data_out[j]), full_save_path, name_exp_pv, detector[j], current_point);
+					pvPut(data_out[j],SYNC);
+					fprintf(detector_files[j], "%s\n", data_out[j]);
+					fflush(detector_files[j]);
+				} else {
+//	other type of detector				
+				}
+			}
+		} state refresh_counters
+	}
+//
+	state refresh_counters {
+		when() {
+			liss_idx++;
+			current_point = liss_idx;
+			scan_progress = 100.0 * liss_idx / liss_npoints_c;
+			pvPut(current_point, SYNC);
+			pvPut(scan_progress, SYNC);
+			printf("Lissajous Scan Progress: %d/%d - X=%.3f Y=%.3f - %.1f%%\n", liss_idx, liss_npoints_c, pos_x, pos_y, scan_progress);
+		} state loops
+	}
+
+
+
+
+
+
+
+
+/*=================== End Scan =========================*/
+	state ending {
+		when() {
+			for (i = 0; i < num_mot; i++) {
+				motor_status[i]=1;
+				pvPut(motor_status[i],SYNC);
+			}
+			for (i = 0; i < num_det; i++) {
+				detector_status[i]=1;
+				pvPut(detector_status[i],SYNC);
+			}
+			printf("\n****************\n");
+			printf("*** End Scan ***\n");
+			printf("****************\n");
+			strcpy(local_actual_status, "Loop End - Status 6");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			scan_busy=1;
+			pvPut(scan_busy,SYNC);
+			current_point = 0;
+			pvPut(current_point,SYNC);
+			scan_progress = 0;
+			pvPut(scan_progress,SYNC);
+			end_scan=1;
+			pvPut(end_scan,SYNC);
+			status_mode=0;
+			pvPut(status_mode,SYNC);
+		} state close_file
+	}
+
+/*=================== Abort Scan =========================*/
+	state abort_scan {
+		when () {
+			for (i = 0; i < num_mot; i++) {
+				motor_status[i]=1;
+				pvPut(motor_status[i],SYNC);
+			}
+			for (i = 0; i < num_det; i++) {
+				detector_status[i]=1;
+				pvPut(detector_status[i],SYNC);
+			}
+			printf("rasterScan: Cleaning up after abort\n");
+//			scan_running = 0;
+//			pvPut(scan_running);
+			scan_busy=1;
+			pvPut(scan_busy,SYNC);
+			current_point = 0;
+			pvPut(current_point,SYNC);
+			scan_progress = 0;
+			pvPut(scan_progress,SYNC);
+			scan_abort = 0;
+			pvPut(scan_abort,SYNC);
+			end_scan=1;
+			pvPut(end_scan,SYNC);
+			status_mode=0;
+			pvPut(status_mode,SYNC);
+		} state close_file
+	}
+/*=================== Close File =========================*/
+	state close_file {
+		when () {
+			if (summary_file != NULL) {
+				fclose(summary_file);
+				summary_file=NULL;
+				printf("Scan: Closed summary file: %s\n", general_path_save_file);
+			}
+			for (i = 0; i < num_det; i++) {
+				if (detector_files[i] != NULL) {
+					fclose(detector_files[i]);
+					detector_files[i] = NULL;
+					printf("Scan: Closed file: %s\n", detector_paths[i]);
+				}
+			}
+			num_files_open = 0;
+			printf("Scan: All files closed\n");
+		} state idle
+
+	}
+/*=================== Pause =========================*/
+	state pause_scan {
+		when(scan_abort==1) {
+			printf("Scan Aborted by User\n");
+		} state abort_scan
+//
+		when (scan_restart==1) {
+			scan_pause = 0;
+			pvPut(scan_pause,SYNC);
+		} state moving  
+		when () {
+			pvGet(scan_restart,SYNC);
+			epicsThreadSleep(0.5);
+		} state pause_scan
+	}
+/*=================== Error Connection =========================*/
+/*
+	state error_connect {
+		when () {
+			printf("System in error state\n");
+			printf("Check PV connections and IOC status\n");
+			strcpy(local_actual_status, "Error PV Connection - Status 4");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			status_mode=0;
+			pvPut(status_mode,SYNC);
+		} state idle
+//		when (delay(5.0)) {
+//			printf("rasterScan: Retrying connection...\n");
+//		} state wait_connect
+	}
+*/
+//
+	state error_busy {
+		when () {
+			printf("System in error state\n");
+			printf("Busy IOCs\n");
+			strcpy(local_actual_status, "IOCs busy - Status 3");
+			strcpy(actual_status,local_actual_status);
+			pvPut(actual_status,SYNC);
+			status_mode=0;
+			pvPut(status_mode,SYNC);
+		} state idle
+	}
+
+
+
+}
+/*
+SPDX-FileCopyrightText: 1998 Argonne National Laboratory
+
+SPDX-License-Identifier: EPICS
+*/

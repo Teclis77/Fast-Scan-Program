@@ -1,0 +1,253 @@
+#################################################
+# ###										### #
+# ### Epics database for					### #
+# ### Scan System with Lissajous Path		### #
+# ###										### #
+# ### author: D. Hampai - M. Montis			### #
+# ###										### #
+# ### Ref 1.0; 2026-07-15					### #
+#################################################
+#
+
+record(ai, $(user):status) {
+	field(DESC, "for test")
+	field(VAL, "0")
+	field(PINI, "YES")
+}
+record(ai, $(user):end_scan) {
+	field(DESC, "Scan end? (1=yes)")
+	field(VAL, "1")
+	field(PINI, "YES")
+}
+record(stringin, $(user):state) {
+	field(DESC, "Actual State")
+	field(VAL, "Idle")
+	field(PINI, "YES")
+}
+record(stringin, $(user):experiment) {
+	field(DESC, "Name Experiment")
+	field(VAL, "$(user)")
+	field(PINI, "YES")
+}
+record(ai, "$(user):total_points") {
+	field(DESC, "Total Number Steps")
+	field(VAL, "0")
+	field(PINI, "YES")
+}
+record(ai, "$(user):current_point") {
+	field(DESC, "General Step Iteration")
+	field(VAL, "0")
+	field(PINI, "YES")
+}
+record(ai, "$(user):scan_progress") {
+	field(DESC, "Scan progress %")
+	field(PREC, "1")
+	field(HOPR, "100")
+	field(LOPR, "0")
+	field(EGU, "%")
+	field(VAL, "0")
+	field(PINI, "YES")
+}
+record(ai, "$(user):scan_busy") {
+	field(DESC, "Scan busy")
+	field(VAL, "1")
+	field(PINI, "YES")
+}
+record(ao, "$(user):scan_pause") {
+	field(DESC, "Scan in Pause")
+	field(VAL, "0")
+	field(PINI, "YES")
+}
+record(ao, "$(user):scan_restart") {
+	field(DESC, "Restart Scan")
+	field(VAL, "0")
+	field(PINI, "YES")
+}
+record(ao, "$(user):scan_abort") {
+	field(DESC, "Abort Scan")
+	field(VAL, "0")
+	field(PINI, "YES")
+}
+#####
+#	Save Path 
+#####
+record(stringout, $(user):scan:filepath) {
+	field(DESC, "Output file path")
+	field(VAL, "temp/data")
+	field(PINI, "YES")
+}
+record(stringout, $(user):server:name) {
+	field(DESC, "Name Server")
+	field(VAL, "$(server)")
+	field(PINI, "YES")
+}
+record(subArray, $(user):filename) {
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "STRING")
+	field(PREC, "3")
+}
+record(stringout, $(user):scan_file) {
+	field(DESC, "File with summary sets")
+	field(VAL, "test.dat")
+	field(PINI, "YES")
+}
+#####
+#       Scan Parameters
+#####
+record(ao, $(user):num_motor) {
+	field(DESC, "Number of Motors")
+	field(VAL, "2")
+	field(PINI, "YES")
+	field(OUT, "$(user):motorindex")
+	field(FLNK, "$(user):motorindex")
+}
+record(dfanout, $(user):motorindex) {
+	field(SELM, "0")
+	field(SELL, "$(user):num_motor")
+	field(OUTA, "$(user):start.NELM")
+	field(OUTB, "$(user):end.NELM")
+	field(OUTC, "$(user):step.NELM")
+	field(OUTD, "$(user):motor.NELM")
+}
+record(ao, $(user):num_detector) {
+	field(DESC, "Number of Detectors")
+	field(VAL, "1")
+	field(PINI, "YES")
+	field(OUT, "$(user):detectorindex")
+	field(FLNK, "$(user):detectorindex")
+}
+record(dfanout, $(user):detectorindex) {
+	field(SELM, "0")
+	field(SELL, "$(user):num_detector")
+	field(OUTA, "$(user):detector.NELM")
+	field(OUTB, "$(user):filename.NELM")
+}
+#
+record(subArray, $(user):start) {
+	field(DESC, "Start point scanning")
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "DOUBLE")
+	field(PREC, "3")
+}
+record(subArray, $(user):end) {
+	field(DESC, "End point scanning")
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "DOUBLE")
+	field(PREC, "3")
+}
+record(subArray, $(user):step) {
+	field(DESC, "Step scanning")
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "DOUBLE")
+	field(PREC, "3")
+}
+record(subArray, $(user):num_steps) {
+	field(DESC, "Number Steps per axis")
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "SHORT")
+}
+#####
+#	Lissajous Parameters
+#	liss_freq[1]=liss_a_freq
+#	liss_freq[2]=liss_b_freq
+#	liss_start, liss_abort don't need (it will prepared on status = 4, instead of evaluation of number of points)
+#
+#####
+record(waveform, $(user):liss_freq) {
+	field(DESC, "Frequency A/B (11/9)")
+	field(NELM, "2")
+#	field(INDX, "0")
+	field(FTVL, "DOUBLE")
+	field(PREC, "1")
+	field(INP, [11,9])
+	field(PINI, "YES")
+}
+record(ao, "$(user):liss_delta") {
+	field(DESC, "Sfasamento delta (rad)")
+	field(VAL,  "0.5236")
+	field(PREC, "4")
+	field(PINI, "YES")
+	field(EGU,  "rad")
+}
+record(longout, "$(user):liss_target_pts") {
+	field(DESC, "Punti target (0=tutti)")
+	field(VAL,  "1000")
+	field(PINI, "YES")
+}
+record(longin, "$(user):liss_skip") {
+	field(DESC, "Skip calcolato (output)")
+	field(VAL,  "1")
+	field(PINI, "YES")
+}
+record(ai, "$(user):liss_pos_x") {
+    field(DESC, "Posizione X")
+    field(PREC, "4")
+    field(EGU,  "mm")
+    field(PINI, "YES")
+}
+record(ai, "$(user):liss_pos_y") {
+    field(DESC, "Posizione Y")
+    field(PREC, "4")
+    field(EGU,  "mm")
+    field(PINI, "YES")
+}
+record(longin, "$(user):liss_npoints") {
+    field(DESC, "Punti path generati")
+    field(VAL,  "0")
+    field(PINI, "YES")
+}
+#####
+#	Definition Motor
+#####
+record(subArray, $(user):motor) {
+	field(DESC, "Name IOC motors")
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "STRING")
+	field(PREC, "3")
+}
+#	List Motor Commands
+record(waveform, $(user):motor_command) {
+	field(DESC, "List Motor Command")
+	field(NELM, "7")
+	field(FTVL, "STRING")
+	field(INP, [setmr,setma,reqmoving,moving,reqpos,pos,busy])
+}
+#####
+#	Definition Detector
+#####
+record(subArray, $(user):detector) {
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "STRING")
+	field(PREC, "3")
+}
+#	List Detector Commands
+record(waveform, $(user):detector_command) {
+	field(DESC, "List Detector Command")
+	field(NELM, "8")
+	field(FTVL, "STRING")
+	field(INP, [reqstart,reqdata,data,reqready,ready,type,busy,dataout])
+}
+#####
+#	Out for Control
+#####
+record(subArray, $(user):data_out) {
+	field(NELM, "20")
+	field(MALM, "20")
+	field(INDX, "0")
+	field(FTVL, "STRING")
+	field(PREC, "3")
+}

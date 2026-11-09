@@ -19,11 +19,17 @@ ls_scan_registerRecordDeviceDriver pdbbase
 
 ## Load record instances
 #dbLoadRecords("db/ls_scan.db","user=xlabsrv11")
-dbLoadRecords("db/ls_scan.db","user=ls_xena,server=xlabsrv11")
+dbLoadRecords("db/ls_scan.db","user=ls_xena,server=xlabsrv2")
+dbLoadRecords("db/ls_scan.db","user=ls_rxr,server=xlabsrv2")
+dbLoadRecords("db/ls_scan.db","user=ls_cts,server=xlabsrv2")
+dbLoadRecords("db/ls_scan.db","user=ls_sox,server=xlabsrv2")
 
 cd "${TOP}/iocBoot/${IOC}"
 iocInit
 
 ## Start any sequence programs
 #seq sncxxx,"user=xlabsrv11"
-seq ls_vitruvio_sncscan,"user=ls_xena,server=xlabsrv11"
+seq ls_vitruvio_sncscan,"user=ls_xena,server=xlabsrv2"
+seq ls_vitruvio_sncscan,"user=ls_rxr,server=xlabsrv2"
+seq ls_vitruvio_sncscan,"user=ls_cts,server=xlabsrv2"
+seq ls_vitruvio_sncscan,"user=ls_sox,server=xlabsrv2"

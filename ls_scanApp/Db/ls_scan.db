@@ -222,7 +222,8 @@ record(waveform, $(user):motor_command) {
 	field(DESC, "List Motor Command")
 	field(NELM, "7")
 	field(FTVL, "STRING")
-	field(INP, [setmr,setma,reqmoving,moving,reqpos,pos,busy])
+#	field(INP, [setmr,setma,reqmoving,moving,reqpos,pos,busy])
+	field(INP, [setmr,setma,ask_request,moving,reqpos,pos,busy])
 }
 #####
 #	Definition Detector

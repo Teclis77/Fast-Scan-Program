@@ -326,6 +326,14 @@ ss lissajous_ss {
 	state assign_motor {
 		when () {
 			printf("num_mot = %d\n", num_mot);
+//			pvGet(motor, SYNC);      // legge tutti gli elementi dell'array
+//			pvGet(mot_command, SYNC); // legge tutti i comandi
+//
+//			printf("motor[0] = '%s'\n", motor[0]);
+//			printf("motor[1] = '%s'\n", motor[1]);
+//			printf("motor connected: %d\n", pvConnected(motor));
+//			printf("motor count: %d\n", pvCount(motor));
+//
 			for (i = 0; i < num_mot; i++) {
 				printf("index = %d\n", i);
 //
@@ -338,6 +346,8 @@ ss lissajous_ss {
 				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
 				printf("%s\n", temp_string);
 				pvAssign(motor_ma[i],temp_string);
+//
+// Ex ioc:reqmov record -> now ioc:ask_request -> for more infos
 //
 				command=2;
 				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
@@ -376,6 +386,8 @@ ss lissajous_ss {
 	state assign_detector {
 		when () {
 			printf("num_det = %d\n", num_det);
+//			pvGet(detector, SYNC);      // legge tutti gli elementi dell'array
+//			pvGet(det_command, SYNC); // legge tutti i comandi
 			for (i = 0; i < num_det; i++) {
 				printf("index = %d\n", i);
 //
@@ -868,19 +880,23 @@ ss lissajous_ss {
 		} state motor_waiting_ready
 	}
 	state motor_waiting_ready {
-		when (allready==0) {
+#		when (allready==0) {
+		when (allready==num_mot) {
+			allready = 0;
 		} state acquiring
 		when () {
 			allready = 0;
-			for (j=0; j < 2; j++) {
+#			for (j=0; j < 2; j++) {
+			for (j=0; j < num_mot; j++) {
 				motor_reqmov[j]=1;
 				pvPut(motor_reqmov[j],SYNC);
+				epicsThreadSleep(0.5);
 				pvGet(motor_mov[j],SYNC);
-				epicsThreadSleep(1.0);
+		printf("Status Motor %d = %d\n", j, motor_mov[j]);
 				if (motor_mov[j]<1) {
 					allready++;
 				}
-				epicsThreadSleep(1.0);
+				epicsThreadSleep(0.5);
 			}
 		} state motor_waiting_ready
 	}
@@ -897,24 +913,27 @@ ss lissajous_ss {
 				detector_reqstart[j]=1;
 				pvPut(detector_reqstart[j],SYNC);
 			}
-		allready = 1;		
+#		allready = 1;		
 		} state waiting_ready
 	}
 //	Phase 2 - Pull untill all ready
 	state waiting_ready {
-		when (allready==0) {
+		when (allready==num_det) {
+			allready = 0;
 		} state saving_data
 		when () {
 			allready = 0;
 			for (j=0; j < num_det; j++) {
 				detector_reqready[j]=1;
 				pvPut(detector_reqready[j],SYNC);
-				epicsThreadSleep(1.0);
+				epicsThreadSleep(0.5);
 				pvGet(detector_ready[j],SYNC);
-				if (detector_ready[j]<1) {
+#				if (detector_ready[j]<1) {
+		printf("Status detector %d = %d\n", j, detector_ready[j]);
+				if (detector_ready[j]>0) {
 					allready++;
 				}
-				epicsThreadSleep(1.0);
+				epicsThreadSleep(0.5);
 			}
 		} state waiting_ready
 	}
@@ -946,16 +965,8 @@ ss lissajous_ss {
 			pvPut(current_point, SYNC);
 			pvPut(scan_progress, SYNC);
 			printf("Lissajous Scan Progress: %d/%d - X=%.3f Y=%.3f - %.1f%%\n", liss_idx, liss_npoints_c, pos_x, pos_y, scan_progress);
-		} state loops
+		} state loop
 	}
-
-
-
-
-
-
-
-
 /*=================== End Scan =========================*/
 	state ending {
 		when() {

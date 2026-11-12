@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <string.h>
 #include "vitruvio_utils.h"
 
 //void generate_filename(char *out, int maxlen, const char *name_exp, const char *det_name, const char *timestamp, int step)
@@ -68,3 +71,18 @@ void generate_general_filename(char *fullpath, int maxlen_path, char *filename, 
     snprintf(fullpath, maxlen_path, "%s/%s", base_path, filename);
 }
 
+int create_session_path(char *fullpath, int maxlen, const char *server, const char *base_path, const char *session)
+{
+    struct stat st = {0};
+
+    snprintf(fullpath, maxlen, "/home/%s/%s/%s", server, base_path, session);
+
+    if (stat(fullpath, &st) == -1) {
+        if (mkdir(fullpath, 0755) != 0) {
+            printf("ERROR - Cannot create directory %s: %s\n", fullpath, strerror(errno));
+            return -1;
+        }
+        printf("Created directory: %s\n", fullpath);
+    }
+    return 0;
+}

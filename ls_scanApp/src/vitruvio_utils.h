@@ -10,4 +10,6 @@ void generate_filename_with_time(char *fullpath, int maxlen_path, char *filename
 
 void generate_general_filename(char *fullpath, int maxlen_path, char *filename, int maxlen_name, const char *base_path, const char *name_exp);
 
+int create_session_path(char *fullpath, int maxlen, const char *server, const char *base_path, const char *session);
+
 #endif

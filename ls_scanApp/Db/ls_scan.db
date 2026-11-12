@@ -76,6 +76,11 @@ record(stringout, $(user):scan:filepath) {
 	field(VAL, "temp/data")
 	field(PINI, "YES")
 }
+record(stringout, $(user):scan:session) {
+        field(DESC, "session folder")
+        field(VAL, "test_folder")
+        field(PINI, "YES")
+}
 record(stringout, $(user):server:name) {
 	field(DESC, "Name Server")
 	field(VAL, "$(server)")

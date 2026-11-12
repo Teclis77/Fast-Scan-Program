@@ -24,6 +24,7 @@ program ls_vitruvio_sncscan
  *   {user}:scan_restart		- ao				- Scan Restart
  *   {user}:scan_abort			- ao				- Scan Abort
  *   {user}:scan:filepath		- stringout			- Output File Path
+ *   {user}:scan:session		- stringout			- Folder Session
  *   {user}:server:name			- stringout			- Name od Server
  *   {user}:filename			- subArray (string)	- Data File Name for each detector
  *   {user}:num_motor			- ao				- Number of Motors (default 2)
@@ -113,6 +114,7 @@ option +r;       /* Make the generated code reentrant, thus allowing more than o
 //	Save Path File
 string output_path; assign output_path to "{user}:scan:filepath"; monitor output_path;
 int num_files_open;
+string session; assign session to "{user}:scan:session"; monitor session;
 
 // Save Summary File
 string sum_file[60]; assign sum_file to "{user}:scan_file"; monitor sum_file;
@@ -769,10 +771,15 @@ ss lissajous_ss {
 			tm_info = localtime(&now);
 			strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
 //
-//	Summary File
+//  Session Directory
 //
-			sprintf(full_save_path, "/home/%s/%s", name_server, output_path);
+			create_session_path(full_save_path, sizeof(full_save_path), name_server, output_path, session);
+//
+//  Summary File
+//
 			generate_general_filename(general_path_save_file, sizeof(general_path_save_file), general_save_file, sizeof(general_save_file), full_save_path, name_exp_pv);
+// Old			sprintf(full_save_path, "/home/%s/%s", name_server, output_path);
+//			generate_general_filename(general_path_save_file, sizeof(general_path_save_file), general_save_file, sizeof(general_save_file), full_save_path, name_exp_pv);
 //
 			strcpy(sum_file,general_save_file);
 			pvPut(sum_file,SYNC);
@@ -801,8 +808,10 @@ ss lissajous_ss {
 			num_files_open = 0;
 			for (i = 0; i < num_det; i++) {
 //				snprintf(files_out[i], sizeof(files_out[i]),"sc_%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
+//				snprintf(files_out[i], sizeof(files_out[i]),"%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
+//				snprintf(detector_paths[i], sizeof(detector_paths[i]),"/home/%s/%s/%s", name_server, output_path, files_out[i]);
 				snprintf(files_out[i], sizeof(files_out[i]),"%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
-				snprintf(detector_paths[i], sizeof(detector_paths[i]),"/home/%s/%s/%s", name_server, output_path, files_out[i]);
+				snprintf(detector_paths[i], sizeof(detector_paths[i]),"%s/%s", full_save_path, files_out[i]);
 				detector_files[i] = fopen(detector_paths[i], "w");
 				printf("Scan: Opening file for Detector %i: %s\n", i+1, detector_paths[i]);
 				if (detector_files[i] == NULL) {

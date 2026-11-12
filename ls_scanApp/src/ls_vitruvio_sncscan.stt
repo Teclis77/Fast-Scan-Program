@@ -124,6 +124,7 @@ string files_out[20]; assign files_out to "{user}:filename"; monitor files_out;
 
 //	Save Data for Detector Type >= 2 (NOME FILE DATA OUT)
 string data_out[20]; assign data_out to {}; monitor data_out;
+string detector_filepath[20]; assign detector_filepath to {}; monitor detector_filepath;
 
 string name_server; assign name_server to "{user}:server:name"; monitor name_server;
 string name_exp_pv; assign name_exp_pv to "{user}:experiment"; monitor name_exp_pv;
@@ -183,7 +184,7 @@ string mot_command[7]; assign mot_command to "{user}:motor_command"; monitor mot
 // Definition Detectors Variables
 //
 string detector[20]; assign detector to "{user}:detector"; monitor detector;
-string det_command[8]; assign det_command to "{user}:detector_command"; monitor det_command;
+string det_command[9]; assign det_command to "{user}:detector_command"; monitor det_command;
 
 // Local Strings
 double motget; assign motget to ""; monitor motget;
@@ -328,13 +329,6 @@ ss lissajous_ss {
 	state assign_motor {
 		when () {
 			printf("num_mot = %d\n", num_mot);
-//			pvGet(motor, SYNC);      // legge tutti gli elementi dell'array
-//			pvGet(mot_command, SYNC); // legge tutti i comandi
-//
-//			printf("motor[0] = '%s'\n", motor[0]);
-//			printf("motor[1] = '%s'\n", motor[1]);
-//			printf("motor connected: %d\n", pvConnected(motor));
-//			printf("motor count: %d\n", pvCount(motor));
 //
 			for (i = 0; i < num_mot; i++) {
 				printf("index = %d\n", i);
@@ -348,8 +342,6 @@ ss lissajous_ss {
 				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
 				printf("%s\n", temp_string);
 				pvAssign(motor_ma[i],temp_string);
-//
-// Ex ioc:reqmov record -> now ioc:ask_request -> for more infos
 //
 				command=2;
 				sprintf(temp_string, "%s:%s", motor[i], mot_command[command]);
@@ -388,8 +380,6 @@ ss lissajous_ss {
 	state assign_detector {
 		when () {
 			printf("num_det = %d\n", num_det);
-//			pvGet(detector, SYNC);      // legge tutti gli elementi dell'array
-//			pvGet(det_command, SYNC); // legge tutti i comandi
 			for (i = 0; i < num_det; i++) {
 				printf("index = %d\n", i);
 //
@@ -432,6 +422,11 @@ ss lissajous_ss {
 				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
 				printf("%s\n", temp_string);
 				pvAssign(data_out[i],temp_string);
+//
+				command=8;
+				sprintf(temp_string, "%s:%s", detector[i], det_command[command]);
+				printf("%s\n", temp_string);
+				pvAssign(detector_filepath[i],temp_string);
 			}
 			strcpy(local_actual_status, "Detect. Parameters Assigned - Status 2");
 			strcpy(actual_status,local_actual_status);
@@ -485,7 +480,6 @@ ss lissajous_ss {
 			liss_b_freq = liss_freq[1];
 			pvGet(liss_delta,  SYNC);
 			pvGet(liss_target, SYNC);
-//			pvGet(liss_outfile,SYNC); -> file di output in altre sezioni
 //
 			printf("start[0] = %f, end[0] = %f, step[0] = %f\n", start[0], end[0], step[0]);
 			printf("start[1] = %f, end[1] = %f, step[1] = %f\n", start[1], end[1], step[1]);
@@ -508,15 +502,6 @@ ss lissajous_ss {
 				 * (if target <= 0 use skip=1, i.e. all points)
 				 */
 				if (liss_target > 0) {
-/*					opt_skip = find_lissajous_skip(
-						xmin, xmax, ymin, ymax,
-						xstep, ystep,
-						liss_a_freq, liss_b_freq, liss_delta,
-						liss_target,
-						liss_x, liss_y,
-						MAX_LISSAJOUS_POINTS
-					);
-*/
 					opt_skip = find_lissajous_skip(
 						start[0], end[0], start[1], end[1],
 						step[0], step[1],
@@ -534,16 +519,6 @@ ss lissajous_ss {
 				/*
 				 * Step 2 - Generate Optimal Path from Optimized Skip 
 				 */
-/*
-				liss_npoints_c = generate_lissajous_path(
-					xmin, xmax, ymin, ymax,
-					xstep, ystep,
-					liss_a_freq, liss_b_freq, liss_delta,
-					opt_skip,
-					liss_x, liss_y,
-					MAX_LISSAJOUS_POINTS
-				);
-*/
 				liss_npoints_c = generate_lissajous_path(
 					start[0], end[0], start[1], end[1],
 					step[0], step[1],
@@ -778,8 +753,11 @@ ss lissajous_ss {
 //  Summary File
 //
 			generate_general_filename(general_path_save_file, sizeof(general_path_save_file), general_save_file, sizeof(general_save_file), full_save_path, name_exp_pv);
-// Old			sprintf(full_save_path, "/home/%s/%s", name_server, output_path);
-//			generate_general_filename(general_path_save_file, sizeof(general_path_save_file), general_save_file, sizeof(general_save_file), full_save_path, name_exp_pv);
+//
+			for (i = 0; i < num_det; i++) {
+				sprintf(detector_filepath[i], "%s/%s", output_path, session);
+				pvPut(detector_filepath[i], SYNC);
+			}
 //
 			strcpy(sum_file,general_save_file);
 			pvPut(sum_file,SYNC);
@@ -792,8 +770,11 @@ ss lissajous_ss {
 				fprintf(summary_file, "# Lissajous Scan Data - Summary\n");
 				fprintf(summary_file, "# Timestamp: %s\n", timestamp);
 				fprintf(summary_file, "# Number of motors: %d\n", num_mot);
+//
+				for (i = 0; i < num_mot; i++ ) {
+					fprintf(summary_file, "# Range Motor[%d]: start[%d] = %f, end[%d] = %f, step[%d] = %f\n", i, i, start[i], i, end[i], i, step[i]);
+				}
 				fprintf(summary_file, "# Number of detectors: %d\n", num_det);
-//	write mot 1, mot 2, ... mot n, det J
 				for (i = 0; i < num_det; i++ ) {
 					for (j = 0; j < num_mot; j++) {
 						fprintf(summary_file, "Motor %d: %s \t", j+1, motor[j]);
@@ -807,9 +788,6 @@ ss lissajous_ss {
 //
 			num_files_open = 0;
 			for (i = 0; i < num_det; i++) {
-//				snprintf(files_out[i], sizeof(files_out[i]),"sc_%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
-//				snprintf(files_out[i], sizeof(files_out[i]),"%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
-//				snprintf(detector_paths[i], sizeof(detector_paths[i]),"/home/%s/%s/%s", name_server, output_path, files_out[i]);
 				snprintf(files_out[i], sizeof(files_out[i]),"%s_%s_%s.dat", name_exp_pv, detector[i], timestamp);
 				snprintf(detector_paths[i], sizeof(detector_paths[i]),"%s/%s", full_save_path, files_out[i]);
 				detector_files[i] = fopen(detector_paths[i], "w");
@@ -889,19 +867,16 @@ ss lissajous_ss {
 		} state motor_waiting_ready
 	}
 	state motor_waiting_ready {
-#		when (allready==0) {
 		when (allready==num_mot) {
 			allready = 0;
 		} state acquiring
 		when () {
 			allready = 0;
-#			for (j=0; j < 2; j++) {
 			for (j=0; j < num_mot; j++) {
 				motor_reqmov[j]=1;
 				pvPut(motor_reqmov[j],SYNC);
 				epicsThreadSleep(0.5);
 				pvGet(motor_mov[j],SYNC);
-		printf("Status Motor %d = %d\n", j, motor_mov[j]);
 				if (motor_mov[j]<1) {
 					allready++;
 				}
@@ -912,7 +887,6 @@ ss lissajous_ss {
 	state acquiring {
 		when() {
 			for (j=0; j < num_det; j++) {
-//	Salvo per primo i valori dei motori sul file generale
 				for (k=0; k<num_mot; k++) {
 					fprintf(detector_files[j], "%.3f\t%.3f\t", motor_ma[k], motor_pos[k]);
 				}
@@ -922,7 +896,6 @@ ss lissajous_ss {
 				detector_reqstart[j]=1;
 				pvPut(detector_reqstart[j],SYNC);
 			}
-#		allready = 1;		
 		} state waiting_ready
 	}
 //	Phase 2 - Pull untill all ready
@@ -937,8 +910,6 @@ ss lissajous_ss {
 				pvPut(detector_reqready[j],SYNC);
 				epicsThreadSleep(0.5);
 				pvGet(detector_ready[j],SYNC);
-#				if (detector_ready[j]<1) {
-		printf("Status detector %d = %d\n", j, detector_ready[j]);
 				if (detector_ready[j]>0) {
 					allready++;
 				}
@@ -957,7 +928,8 @@ ss lissajous_ss {
 				} else if (detector_type[j] == 2) {
 					generate_filename_with_time(data_paths[j], sizeof(data_paths[j]), data_out[j], sizeof(data_out[j]), full_save_path, name_exp_pv, detector[j], current_point);
 					pvPut(data_out[j],SYNC);
-					fprintf(detector_files[j], "%s\n", data_out[j]);
+					fprintf(detector_files[j], "%s\n", data_paths[j]);
+//					fprintf(detector_files[j], "%s\n", data_out[j]);
 					fflush(detector_files[j]);
 				} else {
 //	other type of detector				
@@ -1018,8 +990,6 @@ ss lissajous_ss {
 				pvPut(detector_status[i],SYNC);
 			}
 			printf("rasterScan: Cleaning up after abort\n");
-//			scan_running = 0;
-//			pvPut(scan_running);
 			scan_busy=1;
 			pvPut(scan_busy,SYNC);
 			current_point = 0;
@@ -1081,9 +1051,6 @@ ss lissajous_ss {
 			status_mode=0;
 			pvPut(status_mode,SYNC);
 		} state idle
-//		when (delay(5.0)) {
-//			printf("rasterScan: Retrying connection...\n");
-//		} state wait_connect
 	}
 */
 //

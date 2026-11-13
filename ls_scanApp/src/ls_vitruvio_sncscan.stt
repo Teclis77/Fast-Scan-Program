@@ -928,8 +928,8 @@ ss lissajous_ss {
 				} else if (detector_type[j] == 2) {
 					generate_filename_with_time(data_paths[j], sizeof(data_paths[j]), data_out[j], sizeof(data_out[j]), full_save_path, name_exp_pv, detector[j], current_point);
 					pvPut(data_out[j],SYNC);
-					fprintf(detector_files[j], "%s\n", data_paths[j]);
-//					fprintf(detector_files[j], "%s\n", data_out[j]);
+//					fprintf(detector_files[j], "%s\n", data_paths[j]);
+					fprintf(detector_files[j], "%s\n", data_out[j]);
 					fflush(detector_files[j]);
 				} else {
 //	other type of detector				

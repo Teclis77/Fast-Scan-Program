@@ -873,9 +873,9 @@ ss lissajous_ss {
 		when () {
 			allready = 0;
 			for (j=0; j < num_mot; j++) {
+				epicsThreadSleep(0.5);
 				motor_reqmov[j]=1;
 				pvPut(motor_reqmov[j],SYNC);
-				epicsThreadSleep(0.5);
 				pvGet(motor_mov[j],SYNC);
 				if (motor_mov[j]<1) {
 					allready++;

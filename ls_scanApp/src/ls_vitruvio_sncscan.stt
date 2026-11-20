@@ -88,6 +88,8 @@ static int    liss_idx       = 0;
 
 #define MAX_MOTORS 20
 #define MAX_DETECTORS 20
+#define MOTOR_TOLERANCE 0.05    /* mm - tolleranza posizione motore */
+#define MOTOR_TIMEOUT   20      /* cicli max senza movimento prima di rimandare comando */
 
 //File di Summary
 static FILE *summary_file;
@@ -226,6 +228,8 @@ char temp_exp[40];
 int all_connected;
 int checkbusy;
 int busyioc;
+int timeout_count[20];      /* contatore timeout per ogni motore */
+double last_pos[20];        /* ultima posizione letta per rilevare stallo */
 //
 /* ════════════════════════════════════════════════
  *  VARIABILI SNL → PV
@@ -864,8 +868,18 @@ ss lissajous_ss {
 			pvPut(motor_reqmov[1],SYNC);
 			pvGet(motor_mov[0],SYNC);
 			pvGet(motor_mov[1],SYNC);
+//	Inizializza timeout e ultima posizione
+			for (i=0; i < num_mot; i++) {
+				timeout_count[i] = 0;
+				last_pos[i] = motor_pos[i];
+			}
+			allready = 0;
 		} state motor_waiting_ready
 	}
+//
+//	Attesa fine movimento — usa posizione reale, non motor_mov
+//	Tutti i motori si muovono in parallelo (Lissajous)
+//
 	state motor_waiting_ready {
 		when (allready==num_mot) {
 			allready = 0;
@@ -873,14 +887,30 @@ ss lissajous_ss {
 		when () {
 			allready = 0;
 			for (j=0; j < num_mot; j++) {
-				epicsThreadSleep(0.5);
-				motor_reqmov[j]=1;
-				pvPut(motor_reqmov[j],SYNC);
-				pvGet(motor_mov[j],SYNC);
-				if (motor_mov[j]<1) {
+				epicsThreadSleep(0.3);
+				motor_reqpos[j]=1;
+				pvPut(motor_reqpos[j],SYNC);
+				epicsThreadSleep(0.2);
+				pvGet(motor_pos[j],SYNC);
+				if (fabs(motor_pos[j] - motor_ma[j]) < MOTOR_TOLERANCE) {
 					allready++;
+				} else {
+//	Controlla stallo — se posizione non cambia rimanda comando
+					if (fabs(motor_pos[j] - last_pos[j]) < 0.001) {
+						timeout_count[j]++;
+						if (timeout_count[j] > MOTOR_TIMEOUT) {
+							printf("WARNING: Motor %d stalled at %.3f, resending to %.3f\n",
+								j, motor_pos[j], motor_ma[j]);
+							pvPut(motor_ma[j],SYNC);
+							motor_reqmov[j]=1;
+							pvPut(motor_reqmov[j],SYNC);
+							timeout_count[j] = 0;
+						}
+					} else {
+						timeout_count[j] = 0;
+					}
+					last_pos[j] = motor_pos[j];
 				}
-				epicsThreadSleep(0.5);
 			}
 		} state motor_waiting_ready
 	}
